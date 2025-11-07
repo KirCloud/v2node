@@ -155,9 +155,11 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				// Ensure tag uniqueness per node to avoid different nodes sharing the same outbound
 				ensureOutboundTagUnique(outbound, info)
 
+				// include inboundTag so the rule applies only to traffic from this node's inbound
 				rule := map[string]interface{}{
 					"domain":      route.Match,
 					"outboundTag": outbound.Tag,
+					"inboundTag":  []string{nodeTagSuffix(info)},
 				}
 				rawRule, err := json.Marshal(rule)
 				if err != nil {
@@ -185,9 +187,11 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				// Ensure tag uniqueness per node
 				ensureOutboundTagUnique(outbound, info)
 
+				// include inboundTag so the rule applies only to traffic from this node's inbound
 				rule := map[string]interface{}{
 					"ip":          route.Match,
 					"outboundTag": outbound.Tag,
+					"inboundTag":  []string{nodeTagSuffix(info)},
 				}
 				rawRule, err := json.Marshal(rule)
 				if err != nil {
@@ -207,7 +211,8 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 					continue
 				}
 				// Avoid reusing a fixed "default_out" tag across nodes:
-				if hasOutboundWithTag(coreOutboundConfig, fmt.Sprintf("default_out_%s", nodeTagSuffix(info))) {
+				uniqueDefaultTag := fmt.Sprintf("default_out_%s", nodeTagSuffix(info))
+				if hasOutboundWithTag(coreOutboundConfig, uniqueDefaultTag) {
 					continue
 				}
 				outbound := &coreConf.OutboundDetourConfig{}
@@ -216,7 +221,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 					continue
 				}
 				// Give default_out a node-unique tag
-				outbound.Tag = fmt.Sprintf("default_out_%s", nodeTagSuffix(info))
+				outbound.Tag = uniqueDefaultTag
 				custom_outbound, err := outbound.Build()
 				if err != nil {
 					continue
@@ -225,6 +230,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				rule := map[string]interface{}{
 					"network":     "tcp,udp",
 					"outboundTag": outbound.Tag,
+					"inboundTag":  []string{nodeTagSuffix(info)},
 				}
 				rawRule, err := json.Marshal(rule)
 				if err != nil {

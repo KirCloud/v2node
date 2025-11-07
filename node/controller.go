@@ -113,5 +113,6 @@ func (c *Controller) Close() error {
 }
 
 func (c *Controller) buildNodeTag(node *panel.NodeInfo) string {
-	return fmt.Sprintf("[%s]-%s:%d", c.apiClient.APIHost, node.Type, node.Id)
+	// use a short stable tag so it can be referenced in router rules (node_<id>)
+	return fmt.Sprintf("node_%d", node.Id)
 }
