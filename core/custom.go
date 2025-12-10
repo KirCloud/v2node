@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 
@@ -40,6 +41,22 @@ func hasOutboundWithTag(list []*core.OutboundHandlerConfig, tag string) bool {
 		}
 	}
 	return false
+}
+
+func nodeTagSuffix(info *panel.NodeInfo) string {
+	// use node id so it's concise and stable
+	return fmt.Sprintf("node_%d", info.Id)
+}
+
+// ensureOutboundTagUnique ensures an OutboundDetourConfig has a tag unique to the node by appending a suffix.
+// If outbound.Tag is empty it sets a base tag first.
+func ensureOutboundTagUnique(outbound *coreConf.OutboundDetourConfig, info *panel.NodeInfo) {
+	suffix := nodeTagSuffix(info)
+	if outbound.Tag == "" {
+		outbound.Tag = fmt.Sprintf("out_%s", suffix)
+	} else {
+		outbound.Tag = fmt.Sprintf("%s_%s", outbound.Tag, suffix)
+	}
 }
 
 func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHandlerConfig, *router.Config, error) {
@@ -97,7 +114,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				coreDnsConfig.Servers = append(coreDnsConfig.Servers, server)
 			case "block":
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"domain":      route.Match,
 					"outboundTag": "block",
 				}
@@ -108,7 +125,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
 			case "block_ip":
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"ip":          route.Match,
 					"outboundTag": "block",
 				}
@@ -119,7 +136,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
 			case "block_port":
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"port":        strings.Join(route.Match, ","),
 					"outboundTag": "block",
 				}
@@ -130,7 +147,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
 			case "protocol":
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"protocol":    route.Match,
 					"outboundTag": "block",
 				}
@@ -148,8 +165,13 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				if err != nil {
 					continue
 				}
+
+				// Ensure tag uniqueness per node to avoid different nodes sharing the same outbound
+				ensureOutboundTagUnique(outbound, info)
+
+				// include inboundTag so the rule applies only to traffic from this node's inbound
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"domain":      route.Match,
 					"outboundTag": outbound.Tag,
 				}
@@ -175,8 +197,13 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				if err != nil {
 					continue
 				}
+
+				// Ensure tag uniqueness per node
+				ensureOutboundTagUnique(outbound, info)
+
+				// include inboundTag so the rule applies only to traffic from this node's inbound
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"ip":          route.Match,
 					"outboundTag": outbound.Tag,
 				}
@@ -197,13 +224,25 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				if route.ActionValue == nil {
 					continue
 				}
+				// Avoid reusing a fixed "default_out" tag across nodes:
+				uniqueDefaultTag := fmt.Sprintf("default_out_%s", nodeTagSuffix(info))
+				if hasOutboundWithTag(coreOutboundConfig, uniqueDefaultTag) {
+					continue
+				}
 				outbound := &coreConf.OutboundDetourConfig{}
 				err := json.Unmarshal([]byte(*route.ActionValue), outbound)
 				if err != nil {
 					continue
 				}
+				// Give default_out a node-unique tag
+				outbound.Tag = uniqueDefaultTag
+				custom_outbound, err := outbound.Build()
+				if err != nil {
+					continue
+				}
+				coreOutboundConfig = append(coreOutboundConfig, custom_outbound)
 				rule := map[string]interface{}{
-					"inboundTag":  info.Tag,
+					"inboundTag":  []string{info.Tag},
 					"network":     "tcp,udp",
 					"outboundTag": outbound.Tag,
 				}
@@ -212,14 +251,6 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 					continue
 				}
 				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
-				if hasOutboundWithTag(coreOutboundConfig, outbound.Tag) {
-					continue
-				}
-				custom_outbound, err := outbound.Build()
-				if err != nil {
-					continue
-				}
-				coreOutboundConfig = append(coreOutboundConfig, custom_outbound)
 			default:
 				continue
 			}
